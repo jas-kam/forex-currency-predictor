@@ -1,21 +1,24 @@
 from autots import AutoTS
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from seaborn import regression
 import joblib
 import os
-sns.set()
-plt.style.use('seaborn-v0_8-whitegrid')
 
 import streamlit as st
+
 st.title("Future Forex Currency Price Prediction Model")
+st.write(
+    "Select a currency and forecast period to generate predictions "
+    "from the pre-trained models."
+)
+
+def autots_model_debug(*args, **kwargs):
+    return None
 
 options = {
     'AUSTRALIAN DOLLAR': 'AUSTRALIA - AUSTRALIAN DOLLAR/US$',
     'EURO': 'EURO AREA - EURO/US$',
-    'NEW ZEALAND DOLLAR': 'NEW ZEALAND - NEW ZEALAND DOLLAR/US$',
+#    'NEW ZEALAND DOLLAR': 'NEW ZEALAND - NEW ZELAND DOLLAR/US$',
     'GREAT BRITAIN POUNDS': 'UNITED KINGDOM - UNITED KINGDOM POUND/US$',
     'BRAZILIAN REAL': 'BRAZIL - REAL/US$',
     'CANADIAN DOLLAR': 'CANADA - CANADIAN DOLLAR/US$',
@@ -33,117 +36,194 @@ options = {
     'SWEDEN KRONA': 'SWEDEN - KRONA/US$',
     'SRILANKAN RUPEE': 'SRI LANKA - SRI LANKAN RUPEE/US$',
     'SWISS FRANC': 'SWITZERLAND - FRANC/US$',
-    'NEW TAIWAN DOLLAR': 'TAIWAN - NEW TAIWAN DOLLAR/US$',
-    'THAI BAHT': 'THAILAND - BAHT/US$'
+    #'NEW TAIWAN DOLLAR': 'TAIWAN - NEW TAIWAN DOLLAR/US$',
+    #'THAI BAHT': 'THAILAND - BAHT/US$'
 }
 
-def get_model_filename(currency_name):
-    return f"models/{currency_name.replace(' ', '_').replace('$', '')}_model.pkl"
+CURRENCY_TO_MODEL_FILE = {
+    'AUSTRALIAN DOLLAR': 'AUSTRALIAN_DOLLAR_ARIMA_model.pkl',
+    'BRAZILIAN REAL': 'BRAZILIAN_REAL_AutoTS_model.pkl',
+    'CANADIAN DOLLAR': 'CANADIAN_DOLLAR_ARIMA_model.pkl',
+    'CHINESE YUAN': 'CHINESE_YUAN$_ARIMA_model.pkl',
+    'DANISH KRONE': 'DANISH_KRONE_ARIMA_model.pkl',
+    'EURO': 'EURO_ARIMA_model.pkl',
+    'GREAT BRITAIN POUNDS': 'GREAT_BRITAIN_POUNDS_SARIMA_model.pkl',
+    'HONG KONG DOLLAR': 'HONG_KONG_DOLLAR_SARIMA_model.pkl',
+    'INDIAN RUPEE': 'INDIAN_RUPEE_AutoTS_model.pkl',
+    'KOREAN WON': 'KOREAN_WON$_ARIMA_model.pkl',
+    'MALAYSIAN RINGGIT': 'MALAYSIAN_RINGGIT_ARIMA_model.pkl',
+    'MEXICAN PESO': 'MEXICAN_PESO_AutoTS_model.pkl',
+    #'NEW TAIWAN DOLLAR': 'NEW_TAIWAN_DOLLAR_SARIMA_model.pkl',
+    'JAPANESE YEN': 'JAPANESE_YEN$_SARIMA_model.pkl',
+    'NORWEGIAN KRONE': 'NORWEGIAN_KRONE_ARIMA_model.pkl',
+    'SINGAPORE DOLLAR': 'SINGAPORE_DOLLAR_SARIMA_model.pkl',
+    'SOUTH AFRICAN RAND': 'SOUTH_AFRICAN_RAND$_ARIMA_model.pkl',
+    'SRILANKAN RUPEE': 'SRILANKAN_RUPEE_SARIMA_model.pkl',
+    'SWEDEN KRONA': 'SWEDEN_KRONA_AutoTS_model.pkl',
+    'SWISS FRANC': 'SWISS_FRANC_SARIMA_model.pkl',
+    #'THAI BAHT': 'THAI_BAHT_SARIMA_model.pkl',
+    # add NEW ZEALAND DOLLAR / JAPANESE YEN etc
+}
 
-def load_currency_model(currency_name):
-    model_filename = get_model_filename(currency_name)
-    
-    if os.path.exists(model_filename):
+MODELS_DIR = "models"
+os.makedirs(MODELS_DIR, exist_ok=True)
+
+def load_saved_model(currency_name: str):
+    if currency_name not in CURRENCY_TO_MODEL_FILE:
+        st.error(f"No model file mapping defined for '{currency_name}'.")
+        return None
+
+    filename = CURRENCY_TO_MODEL_FILE[currency_name]
+    filepath = os.path.join(MODELS_DIR, filename)
+
+    if not os.path.exists(filepath):
+        st.error(f"Model file not found for {currency_name}: '{filepath}'")
+        return None
+
+    try:
+        loaded = joblib.load(filepath)
+    except Exception as e:
+        st.error(f"Error loading model file for {currency_name}: {e}")
+        return None
+
+    st.success(f"Loaded existing model file for {currency_name}")
+    if isinstance(loaded, dict):
+        st.info(
+            f"Loaded object for {currency_name} "
+            f"is a dict with keys {list(loaded.keys())}."
+        )
+
+    return loaded
+
+
+def _find_model_object(obj, _visited=None):
+    if _visited is None:
+        _visited = set()
+
+    oid = id(obj)
+    if oid in _visited:
+        return None
+    _visited.add(oid)
+
+    if hasattr(obj, "predict") or hasattr(obj, "forecast"):
+        return obj
+
+    if isinstance(obj, dict):
+        for v in obj.values():
+            found = _find_model_object(v, _visited)
+            if found is not None:
+                return found
+
+    if isinstance(obj, (list, tuple, set)):
+        for v in obj:
+            found = _find_model_object(v, _visited)
+            if found is not None:
+                return found
+
+    return None
+
+
+def forecast_from_model_container(
+    container,
+    forecast_days: int,
+    display_name: str
+) -> pd.DataFrame | None:
+
+    model_obj = _find_model_object(container)
+
+    if model_obj is None:
+        st.error(
+            "Could not find a model object with .predict() or .forecast() "
+            "inside the saved file."
+        )
+        return None
+
+    module = type(model_obj).__module__.lower()
+    cls_name = type(model_obj).__name__
+    st.info(f"Using model class: {cls_name} (module: {module})")
+
+    steps = int(forecast_days)
+
+    if "autots" in module or isinstance(model_obj, AutoTS):
         try:
-            model_info = joblib.load(model_filename)
-            st.success(f"Loaded pre-trained model for {currency_name}")
-            return model_info
+            prediction = model_obj.predict(forecast_length=steps)
+            fc = prediction.forecast
+            if len(fc) > steps:
+                fc = fc.iloc[:steps]
+            return fc
         except Exception as e:
-            st.error(f"Error loading model for {currency_name}: {str(e)}")
+            st.error(f"AutoTS prediction error: {e}")
             return None
-    else:
-        st.warning(f"Training new model for {currency_name} (this may take a while)...")
-        return None
 
-def train_new_model(selected_option, forecast_days):
-    try:
-        data = pd.read_csv("data/Foreign_Exchange_Rates.csv")
-        data.dropna(inplace=True)
-        data['Time Serie'] = pd.to_datetime(data['Time Serie'], format='%d-%m-%Y')
-        
-        model = AutoTS(
-            forecast_length=int(forecast_days), 
-            frequency='infer', 
-            ensemble='simple', 
-            drop_data_older_than_periods=200
-        )
-        model = model.fit(
-            data, 
-            date_col='Time Serie', 
-            value_col=options[selected_option], 
-            id_col=None
-        )
-        
-        model_info = {
-            'model': model,
-            'currency_name': selected_option,
-            'trained_date': pd.Timestamp.now()
-        }
-        os.makedirs('models', exist_ok=True)
-        joblib.dump(model_info, get_model_filename(selected_option))
-        
-        st.success(f"Model trained and saved for {selected_option}")
-        return model
-        
-    except Exception as e:
-        st.error(f"Error training model: {str(e)}")
-        return None
+    if "statsmodels" in module:
+        try:
+            if hasattr(model_obj, "get_forecast"):
+                fc = model_obj.get_forecast(steps=steps).predicted_mean
+            elif hasattr(model_obj, "forecast"):
+                fc = model_obj.forecast(steps=steps)
+            else:
+                st.error(
+                    "Statsmodels model has neither get_forecast nor forecast."
+                )
+                return None
 
-def make_forecast(selected_option, forecast_days):
-    model_info = load_currency_model(selected_option)
-    
-    if model_info is not None:
-        model = model_info['model']
-        model.forecast_length = int(forecast_days)
-    else:
-        # Train a new model
-        model = train_new_model(selected_option, forecast_days)
-        if model is None:
+            fc = pd.Series(fc, name=display_name)
+            return fc.to_frame()
+        except Exception as e:
+            st.error(f"ARIMA/SARIMA prediction error: {e}")
             return None
-    
-    # Make prediction
+
     try:
-        prediction = model.predict()
-        forecast = prediction.forecast
-        return forecast
+        try:
+            yhat = model_obj.predict(steps)
+        except TypeError:
+            # e.g. pmdarima: predict(n_periods=steps)
+            yhat = model_obj.predict(n_periods=steps)
+
+        fc = pd.Series(yhat, name=display_name).to_frame()
+        return fc
     except Exception as e:
-        st.error(f"Error making prediction: {str(e)}")
+        st.error(
+            f"Don't know how to call predict() on model type {cls_name}: {e}"
+        )
         return None
 
-# Create models directory
-os.makedirs('models', exist_ok=True)
 
-# Simple main interface
-st.write("Select a currency and forecast period to generate predictions.")
+def make_forecast(selected_option: str, forecast_days: int):
+    container = load_saved_model(selected_option)
+    if container is None:
+        return None
 
-selected_option = st.selectbox('Choose a currency:', list(options.keys()))
+    display_name = options[selected_option]
+    return forecast_from_model_container(container, forecast_days, display_name)
+
+
+selected_option = st.selectbox("Choose a currency:", list(options.keys()))
+
 forecast_days = st.number_input(
     "Forecast Days:",
     min_value=1,
     max_value=100,
     value=30,
     step=1,
-    help="Number of days to forecast into the future"
+    help="Number of days to forecast into the future",
 )
 
-if st.button('Generate Predictions'):
-    with st.spinner(f"Generating {forecast_days}-day forecast for {selected_option}..."):
-        try:
-            forecast = make_forecast(selected_option, forecast_days)
-            
-            if forecast is not None and len(forecast) > 0:
-                st.success("Forecast generated successfully!")
-                
-                # Display results
-                st.subheader("Forecast Chart")
-                st.line_chart(forecast)
-                
-                st.subheader("Forecast Data")
-                st.dataframe(forecast)
+if st.button("Generate Predictions"):
+    with st.spinner(
+        f"Generating {forecast_days}-day forecast for {selected_option}..."
+    ):
+        forecast = make_forecast(selected_option, int(forecast_days))
 
-            else:
-                st.error("Failed to generate forecast. Please check if the data file exists.")
-                
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-            st.info("Make sure your data file exists at 'data/Foreign_Exchange_Rates.csv'")
+        if forecast is not None and len(forecast) > 0:
+            st.success("Forecast generated successfully!")
+
+            st.subheader("Forecast Chart")
+            st.line_chart(forecast)
+
+            st.subheader("Forecast Data")
+            st.dataframe(forecast)
+        else:
+            st.error(
+                "Failed to generate forecast from the saved model."
+            )
