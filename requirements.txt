@@ -3,4 +3,8 @@ pandas
 matplotlib
 seaborn
 autots
+scikit-learn
+python-dateutil
+statsmodels
+joblib
 
